@@ -41,7 +41,7 @@ jobs:
           Copy-Item $ffExe.FullName bin/ffmpeg.exe -Force
           Copy-Item $fpExe.FullName bin/ffprobe.exe -Force
 
-      - name: Build EXE with PyInstaller
+      - name: Build onefile EXE (no UPX)
         shell: pwsh
         run: |
           if (Test-Path build) { Remove-Item -Recurse -Force build }
@@ -51,17 +51,45 @@ jobs:
             --name video_slicer `
             --onefile `
             --noconsole `
+            --noupx `
             --add-data "README.md;." `
             --add-data "requirements.txt;." `
             --add-binary "bin/ffmpeg.exe;." `
             --add-binary "bin/ffprobe.exe;." `
             app.py
 
-      - name: Upload artifact
+      - name: Upload onefile artifact
         uses: actions/upload-artifact@v4
         with:
-          name: video_slicer-windows
+          name: video_slicer-windows-onefile
           path: dist/video_slicer.exe
+
+      - name: Build onedir folder (no UPX)
+        shell: pwsh
+        run: |
+          if (Test-Path build) { Remove-Item -Recurse -Force build }
+          if (Test-Path dist)  { Remove-Item -Recurse -Force dist }
+          if (Test-Path app.spec) { Remove-Item -Force app.spec }
+          pyinstaller `
+            --name video_slicer_folder `
+            --noconsole `
+            --noupx `
+            --add-data "README.md;." `
+            --add-data "requirements.txt;." `
+            --add-binary "bin/ffmpeg.exe;." `
+            --add-binary "bin/ffprobe.exe;." `
+            app.py
+
+      - name: Zip onedir folder
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/video_slicer_folder/* -DestinationPath dist/video_slicer_folder.zip
+
+      - name: Upload onedir artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: video_slicer-windows-onedir
+          path: dist/video_slicer_folder.zip
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
@@ -69,5 +97,6 @@ jobs:
         with:
           files: |
             dist/video_slicer.exe
+            dist/video_slicer_folder.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
