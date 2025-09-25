@@ -8,6 +8,7 @@ import shutil
 from dataclasses import dataclass
 from typing import List, Optional, Dict
 from tkinter import Tk, Button, Label, Entry, StringVar, BooleanVar, Checkbutton, filedialog, messagebox, ttk
+import json
 
 
 @dataclass
@@ -91,14 +92,12 @@ def get_video_duration_seconds(input_path: str) -> float:
 
 
 def list_audio_tracks(input_path: str) -> List[Dict[str, str]]:
-    """Return a list of audio tracks with metadata using ffprobe.
-    Each item has keys: idx (audio index), codec, lang, title, channels.
+    """Return a list of audio tracks with metadata using ffprobe (JSON output).
+    Each item has keys: idx (stream index in file), codec, lang, title, channels, label.
+    The order of returned items corresponds to 0:a:<position> mapping.
     """
     ffprobe_path = resolve_tool_path("ffprobe")
     try:
-        # We query only audio streams and print fields in a parseable format
-        # Use csv output for easier parsing without newlines in titles
-        fields = "index,codec_name:stream_tags=language,title:channels"
         result = subprocess.run(
             [
                 ffprobe_path,
@@ -107,9 +106,9 @@ def list_audio_tracks(input_path: str) -> List[Dict[str, str]]:
                 "-select_streams",
                 "a",
                 "-show_entries",
-                f"stream={fields}",
+                "stream=index,codec_name,channels,tags",
                 "-of",
-                "csv=p=0",
+                "json",
                 input_path,
             ],
             stdout=subprocess.PIPE,
@@ -117,23 +116,31 @@ def list_audio_tracks(input_path: str) -> List[Dict[str, str]]:
             text=True,
             check=True,
         )
+        data = json.loads(result.stdout or "{}")
+        streams = data.get("streams", []) or []
         tracks: List[Dict[str, str]] = []
-        for line in result.stdout.splitlines():
-            parts = line.split(",")
-            # Expected columns: index, codec_name, language, title, channels
-            if len(parts) >= 5:
-                idx, codec, lang, title, channels = parts[:5]
-            else:
-                # Fallback parsing (some tags may be missing)
-                parts += [""] * (5 - len(parts))
-                idx, codec, lang, title, channels = parts[:5]
-            label = f"#{idx} {codec or 'audio'} {channels or ''} {lang or ''} {title or ''}".strip()
+        for s in streams:
+            idx = str(s.get("index", ""))
+            codec = str(s.get("codec_name", ""))
+            channels = str(s.get("channels", ""))
+            tags = s.get("tags", {}) or {}
+            lang = str(tags.get("language", ""))
+            title = str(tags.get("title", ""))
+            # For display
+            pieces = [f"#{idx}", codec or "audio"]
+            if channels:
+                pieces.append(f"{channels}ch")
+            if lang:
+                pieces.append(lang)
+            if title:
+                pieces.append(title)
+            label = " ".join(pieces)
             tracks.append({
-                "idx": idx.strip(),
-                "codec": codec.strip(),
-                "lang": lang.strip(),
-                "title": title.strip(),
-                "channels": channels.strip(),
+                "idx": idx,
+                "codec": codec,
+                "lang": lang,
+                "title": title,
+                "channels": channels,
                 "label": label,
             })
         return tracks
@@ -179,7 +186,7 @@ def slice_video_ffmpeg(input_path: str, output_dir: str, config: SliceConfig, pr
     if config.audio_stream_index is not None:
         cmd += ["-map", f"0:a:{config.audio_stream_index}"]
     else:
-        # Ensure only one audio stream if multiple exist: pick the first
+        # Ensure only one audio stream if multiple exist: pick the first if present
         cmd += ["-map", "0:a:0?"]
 
     if config.fast_copy:
