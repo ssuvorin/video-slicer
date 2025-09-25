@@ -1,0 +1,68 @@
+name: Windows EXE Build
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Prepare ffmpeg (static)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path bin | Out-Null
+          $zipUrl = 'https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-6.1.1-essentials_build.zip'
+          $zipPath = "$PWD/ffmpeg.zip"
+          Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath
+          Expand-Archive -Path $zipPath -DestinationPath $PWD/ffmpeg -Force
+          $ffdir = Get-ChildItem -Directory ffmpeg | Select-Object -First 1
+          Copy-Item "$($ffdir.FullName)\bin\ffmpeg.exe" bin\ffmpeg.exe -Force
+          Copy-Item "$($ffdir.FullName)\bin\ffprobe.exe" bin\ffprobe.exe -Force
+
+      - name: Build EXE with PyInstaller
+        shell: pwsh
+        run: |
+          if (Test-Path build) { Remove-Item -Recurse -Force build }
+          if (Test-Path dist)  { Remove-Item -Recurse -Force dist }
+          if (Test-Path app.spec) { Remove-Item -Force app.spec }
+          pyinstaller `
+            --name video_slicer `
+            --onefile `
+            --noconsole `
+            --add-data "README.md;." `
+            --add-data "requirements.txt;." `
+            --add-binary "bin/ffmpeg.exe;." `
+            --add-binary "bin/ffprobe.exe;." `
+            app.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: video_slicer-windows
+          path: dist/video_slicer.exe
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/video_slicer.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
