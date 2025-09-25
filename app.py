@@ -126,15 +126,16 @@ def list_audio_tracks(input_path: str) -> List[Dict[str, str]]:
             tags = s.get("tags", {}) or {}
             lang = str(tags.get("language", ""))
             title = str(tags.get("title", ""))
-            # For display
-            pieces = [f"#{idx}", codec or "audio"]
+            # Prefer human-readable name: title > language > #index
+            main = title.strip() or lang.strip() or f"Stream #{idx}"
+            # Provide compact technical suffix
+            tech_parts = []
+            if codec:
+                tech_parts.append(codec)
             if channels:
-                pieces.append(f"{channels}ch")
-            if lang:
-                pieces.append(lang)
-            if title:
-                pieces.append(title)
-            label = " ".join(pieces)
+                tech_parts.append(f"{channels}ch")
+            suffix = f" ({' '.join(tech_parts)})" if tech_parts else ""
+            label = f"{main}{suffix}"
             tracks.append({
                 "idx": idx,
                 "codec": codec,
@@ -157,7 +158,8 @@ def slice_video_ffmpeg(input_path: str, output_dir: str, config: SliceConfig, pr
     """
     Slice video into segments using ffmpeg segment muxer.
     If fast_copy is True, streams are copied (-c copy), which is much faster but
-    cuts can align to keyframes. Otherwise, re-encode to H.264/AAC for compatibility.
+    cuts can align to keyframes. Otherwise, re-encode to H.264/AAC for compatibility
+    and enforce keyframes at boundaries for more stable segment lengths.
     """
     if not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
@@ -182,11 +184,10 @@ def slice_video_ffmpeg(input_path: str, output_dir: str, config: SliceConfig, pr
 
     # Stream mapping: always one video stream (0:v:0)
     cmd += ["-map", "0:v:0"]
-    # Audio: map selected index if provided, else let ffmpeg choose the first audio automatically
+    # Audio: map selected index if provided, else pick first if present
     if config.audio_stream_index is not None:
         cmd += ["-map", f"0:a:{config.audio_stream_index}"]
     else:
-        # Ensure only one audio stream if multiple exist: pick the first if present
         cmd += ["-map", "0:a:0?"]
 
     if config.fast_copy:
@@ -195,6 +196,8 @@ def slice_video_ffmpeg(input_path: str, output_dir: str, config: SliceConfig, pr
             "copy",
         ]
     else:
+        # Re-encode video and enforce keyframes at segment boundaries
+        force_expr = f"expr:gte(t,n_forced*{config.segment_seconds})"
         cmd += [
             "-c:v",
             "libx264",
@@ -202,17 +205,24 @@ def slice_video_ffmpeg(input_path: str, output_dir: str, config: SliceConfig, pr
             "veryfast",
             "-crf",
             "23",
+            "-sc_threshold",
+            "0",
+            "-force_key_frames",
+            force_expr,
             "-c:a",
             "aac",
             "-b:a",
             "128k",
         ]
 
+    # Segmenter settings
     cmd += [
         "-f",
         "segment",
         "-segment_time",
         str(config.segment_seconds),
+        "-segment_time_delta",
+        "0.05",
         "-reset_timestamps",
         "1",
         output_pattern,
