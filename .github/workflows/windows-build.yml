@@ -26,14 +26,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Install ffmpeg via Chocolatey and prepare bin
+      - name: Install ffmpeg via Chocolatey and prepare bin (real binaries)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           choco install ffmpeg -y --no-progress
           New-Item -ItemType Directory -Force -Path bin | Out-Null
-          Copy-Item "$env:ChocolateyInstall\bin\ffmpeg.exe" bin\ffmpeg.exe -Force
-          Copy-Item "$env:ChocolateyInstall\bin\ffprobe.exe" bin\ffprobe.exe -Force
+          # Find real ffmpeg/ffprobe binaries inside Chocolatey package (not shims)
+          $ffExe = Get-ChildItem "$env:ChocolateyInstall/lib/ffmpeg*" -Recurse -Filter ffmpeg.exe | Where-Object { $_.FullName -match "\\tools\\.*\\bin\\ffmpeg\.exe$" } | Select-Object -First 1
+          $fpExe = Get-ChildItem "$env:ChocolateyInstall/lib/ffmpeg*" -Recurse -Filter ffprobe.exe | Where-Object { $_.FullName -match "\\tools\\.*\\bin\\ffprobe\.exe$" } | Select-Object -First 1
+          if (-not $ffExe -or -not $fpExe) {
+            Write-Error "Failed to locate real ffmpeg/ffprobe binaries in Chocolatey package."
+          }
+          Copy-Item $ffExe.FullName bin/ffmpeg.exe -Force
+          Copy-Item $fpExe.FullName bin/ffprobe.exe -Force
 
       - name: Build EXE with PyInstaller
         shell: pwsh
