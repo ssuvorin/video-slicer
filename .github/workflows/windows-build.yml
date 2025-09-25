@@ -23,18 +23,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Prepare ffmpeg (static)
+      - name: Install ffmpeg via Chocolatey and prepare bin
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          choco install ffmpeg -y --no-progress
           New-Item -ItemType Directory -Force -Path bin | Out-Null
-          $zipUrl = 'https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-6.1.1-essentials_build.zip'
-          $zipPath = "$PWD/ffmpeg.zip"
-          Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath
-          Expand-Archive -Path $zipPath -DestinationPath $PWD/ffmpeg -Force
-          $ffdir = Get-ChildItem -Directory ffmpeg | Select-Object -First 1
-          Copy-Item "$($ffdir.FullName)\bin\ffmpeg.exe" bin\ffmpeg.exe -Force
-          Copy-Item "$($ffdir.FullName)\bin\ffprobe.exe" bin\ffprobe.exe -Force
+          Copy-Item "$env:ChocolateyInstall\bin\ffmpeg.exe" bin\ffmpeg.exe -Force
+          Copy-Item "$env:ChocolateyInstall\bin\ffprobe.exe" bin\ffprobe.exe -Force
 
       - name: Build EXE with PyInstaller
         shell: pwsh
