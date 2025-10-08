@@ -5,6 +5,7 @@ import sys
 import threading
 import math
 import shutil
+import random
 from dataclasses import dataclass
 from typing import List, Optional, Dict
 from tkinter import Tk, Button, Label, Entry, StringVar, BooleanVar, Checkbutton, filedialog, messagebox, ttk
@@ -13,7 +14,8 @@ import json
 
 @dataclass
 class SliceConfig:
-    segment_seconds: int = 15
+    min_seconds: int = 10
+    max_seconds: int = 20
     fast_copy: bool = False
     audio_stream_index: Optional[int] = None  # ffprobe stream index within audio streams (0-based)
 
@@ -156,7 +158,7 @@ def build_output_pattern(output_dir: str, base_name: str) -> str:
 
 def slice_video_ffmpeg(input_path: str, output_dir: str, config: SliceConfig, progress_callback=None) -> None:
     """
-    Slice video into segments using ffmpeg segment muxer.
+    Slice video into segments using ffmpeg segment muxer with random durations.
     If fast_copy is True, streams are copied (-c copy), which is much faster but
     cuts can align to keyframes. Otherwise, re-encode to H.264/AAC for compatibility
     and enforce keyframes at boundaries for more stable segment lengths.
@@ -173,6 +175,14 @@ def slice_video_ffmpeg(input_path: str, output_dir: str, config: SliceConfig, pr
         duration_seconds = 0.0
 
     ffmpeg_path = resolve_tool_path("ffmpeg")
+
+    # Generate random segment times
+    segment_times = []
+    current_time = 0.0
+    while current_time < duration_seconds:
+        segment_duration = random.uniform(config.min_seconds, config.max_seconds)
+        segment_times.append(current_time + segment_duration)
+        current_time += segment_duration
 
     cmd = [
         ffmpeg_path,
@@ -197,7 +207,7 @@ def slice_video_ffmpeg(input_path: str, output_dir: str, config: SliceConfig, pr
         ]
     else:
         # Re-encode video and enforce keyframes at segment boundaries
-        force_expr = f"expr:gte(t,n_forced*{config.segment_seconds})"
+        force_expr = f"expr:gte(t,n_forced*{config.min_seconds})"
         cmd += [
             "-c:v",
             "libx264",
@@ -215,14 +225,12 @@ def slice_video_ffmpeg(input_path: str, output_dir: str, config: SliceConfig, pr
             "128k",
         ]
 
-    # Segmenter settings
+    # Segmenter settings with custom segment times
     cmd += [
         "-f",
         "segment",
-        "-segment_time",
-        str(config.segment_seconds),
-        "-segment_time_delta",
-        "0.05",
+        "-segment_times",
+        ",".join(map(str, segment_times)),
         "-reset_timestamps",
         "1",
         output_pattern,
@@ -230,7 +238,7 @@ def slice_video_ffmpeg(input_path: str, output_dir: str, config: SliceConfig, pr
 
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
 
-    approx_total_segments = int(math.ceil(duration_seconds / config.segment_seconds)) if duration_seconds > 0 else None
+    approx_total_segments = len(segment_times)
     segments_done = 0
 
     if progress_callback is not None and approx_total_segments is not None:
@@ -256,11 +264,12 @@ def slice_video_ffmpeg(input_path: str, output_dir: str, config: SliceConfig, pr
 class App:
     def __init__(self, root: Tk):
         self.root = root
-        self.root.title("Нарезчик видео — 15с")
+        self.root.title("Нарезчик видео — случайная длина")
 
         self.video_path_var = StringVar()
         self.output_dir_var = StringVar()
-        self.segment_len_var = StringVar(value="15")
+        self.min_len_var = StringVar(value="10")
+        self.max_len_var = StringVar(value="20")
         self.fast_copy_var = BooleanVar(value=False)
         self.status_var = StringVar(value="Готово")
         self.audio_choice_var = StringVar(value="")
@@ -276,27 +285,30 @@ class App:
         Entry(root, textvariable=self.output_dir_var, width=50).grid(row=1, column=1, **pad)
         Button(root, text="Папка...", command=self.choose_output_dir).grid(row=1, column=2, **pad)
 
-        Label(root, text="Длина сегмента (сек):").grid(row=2, column=0, sticky="w", **pad)
-        Entry(root, textvariable=self.segment_len_var, width=10).grid(row=2, column=1, sticky="w", **pad)
+        Label(root, text="Мин. длина (сек):").grid(row=2, column=0, sticky="w", **pad)
+        Entry(root, textvariable=self.min_len_var, width=10).grid(row=2, column=1, sticky="w", **pad)
 
-        Checkbutton(root, text="Быстро (без перекодирования)", variable=self.fast_copy_var).grid(row=2, column=2, sticky="w", **pad)
+        Label(root, text="Макс. длина (сек):").grid(row=2, column=2, sticky="w", **pad)
+        Entry(root, textvariable=self.max_len_var, width=10).grid(row=2, column=3, sticky="w", **pad)
 
-        Label(root, text="Аудиодорожка:").grid(row=3, column=0, sticky="w", **pad)
+        Checkbutton(root, text="Быстро (без перекодирования)", variable=self.fast_copy_var).grid(row=3, column=0, columnspan=2, sticky="w", **pad)
+
+        Label(root, text="Аудиодорожка:").grid(row=4, column=0, sticky="w", **pad)
         self.audio_combo = ttk.Combobox(root, textvariable=self.audio_choice_var, width=48, state="readonly")
-        self.audio_combo.grid(row=3, column=1, columnspan=2, sticky="we", **pad)
+        self.audio_combo.grid(row=4, column=1, columnspan=3, sticky="we", **pad)
         self.audio_combo["values"] = ["(нет данных)"]
 
         self.progress = ttk.Progressbar(root, orient="horizontal", length=460, mode="determinate")
-        self.progress.grid(row=4, column=0, columnspan=3, padx=10, pady=12)
+        self.progress.grid(row=5, column=0, columnspan=4, padx=10, pady=12)
 
         self.start_button = Button(root, text="Нарезать", command=self.start_slicing)
-        self.start_button.grid(row=5, column=0, columnspan=3, **pad)
+        self.start_button.grid(row=6, column=0, columnspan=4, **pad)
 
         self.status_label = Label(root, textvariable=self.status_var)
-        self.status_label.grid(row=6, column=0, columnspan=3, sticky="w", **pad)
+        self.status_label.grid(row=7, column=0, columnspan=4, sticky="w", **pad)
 
         # macOS/Windows: set a reasonable window size
-        root.minsize(700, 260)
+        root.minsize(750, 280)
 
     def choose_video(self):
         path = filedialog.askopenfilename(title="Выберите видео файл", filetypes=[("Видео", "*.mp4 *.mov *.mkv *.avi *.m4v *.webm"), ("Все файлы", "*.*")])
@@ -346,15 +358,17 @@ class App:
             return
 
         try:
-            seg = int(self.segment_len_var.get().strip())
-            if seg <= 0:
+            min_len = int(self.min_len_var.get().strip())
+            max_len = int(self.max_len_var.get().strip())
+            if min_len <= 0 or max_len <= 0 or min_len >= max_len:
                 raise ValueError
         except Exception:
-            messagebox.showerror("Ошибка", "Длина сегмента должна быть положительным целым числом")
+            messagebox.showerror("Ошибка", "Мин. и макс. длина должны быть положительными числами, мин. < макс.")
             return
 
         config = SliceConfig(
-            segment_seconds=seg,
+            min_seconds=min_len,
+            max_seconds=max_len,
             fast_copy=self.fast_copy_var.get(),
             audio_stream_index=self._selected_audio_index(),
         )
